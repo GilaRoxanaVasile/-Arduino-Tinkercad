@@ -1,0 +1,157 @@
+
+void setup()
+{
+  DDRB|=0xFF;
+  DDRD|=0xF8;
+  DDRC&=~0x03;
+  TCCR0A=0x83; // mod PMW
+  TCCR0B=0x03; // setare prescaler 256
+  TIMSK2=0x01; 
+  TCCR2A=0x02; // mod CTC
+  TCCR2B=0x07; // setare prescaler 1024
+}
+
+int litera, i, xctc, temp;
+unsigned char litera_data;
+float numar_CAN, x, t;
+char intreaga[22], fractionara[11];
+
+void loop()
+{
+  
+  OCR2A=156; //(1)setare registru pt mod ctc-timer 2 aprindere/stingere led pin 12-port D
+    
+    //(6)afisare initiale pe 7segm cand apas buton 
+  if(PIND&0x04) //daca apas buton (port D-pin 2)
+  {
+  PORTD=B10101000; // G
+  PORTB=B00000011;
+    delay(500);  
+  PORTD=B00000000; // r
+  PORTB=B00000101;
+    delay(500);
+  PORTD=B10100000; // V
+  PORTB=B00000001;
+    delay(500);
+  PORTD=0x00;
+  PORTB=0x00;
+  }
+  
+    //(5)mod PMW led port D pin 6 fade
+  for(i=0;i<256;i++) //fade in 1 sec
+  {
+    OCR0A=i;
+    delay(4);            // delay de 1000:256~=4 ca sa fie pe durata unei sec
+  }
+  delay(1000);   //sta aprins o sec
+  for(i=255;i>=0;i--) //fade out 1 sec
+  {
+    OCR0A=i;
+    delay(4);
+  }
+  delay(1000); //sta stins o sec
+ 	
+  	//(2+4)functie initializare comunicatie seriala
+  serial_init();
+  	//(2)functie pentru arpindere/stingere led port B pin 11 in functie de caract. 'A' si 'S' trimise pe comunicatia seriala
+  on_off_led11();
+  
+    //(3+4) temperatura  
+  adc_init (); //apelare functie adc initializare
+  temperatura();
+
+}
+
+ISR(TIMER2_OVF_vect)
+{
+  //Toggle port B pin 12 la intrerupere de la Timer 2
+  xctc++;
+  if(xctc==100) 
+  {	
+    PORTB^=0x10;
+    xctc=0;
+  }
+}
+
+void adc_init() //adc initialization 
+{ 
+ ADCSRA |= ((1<<ADPS2) | (1<<ADPS1) | (1<<ADPS0)); //set division factor between system clock 
+                                                   //frequency and the input clock to the ADC- 128 
+ ADMUX |= (1<<REFS0); //AVcc with external capacitor at Aref pin 
+ ADCSRA |= (1<<ADEN);//enable ADC 
+ ADCSRA |= (1<<ADSC);//ADC start conversion 
+} 
+
+uint16_t read_adc(uint8_t channel) 
+{ 
+ ADMUX &= 0xF0;//set input AO to A5
+ ADMUX |= channel;//select chanel AO to A5
+ ADCSRA |= (1<<ADSC); //start conversion
+ while(ADCSRA & (1<<ADSC));//wait wile adc conversion are not updated 
+ return ADCW; //read and return voltage 
+}
+
+void serial_init() //comunicatie seriala initializare
+{
+  UBRR0=103; // mod asincron 
+  			//FOSC=16000000;  BAUD=9600;
+  			//UDRR0=[FOSC/(16*9600)]-1=[16000000/(16*9600)]-1=103
+  UCSR0B=(1<<RXEN0)|(1<<TXEN0);//validare receptie si transmisie
+  UCSR0C=(1<<USBS0)|(1<<UCSZ00)|(1<<UCSZ01);// 2 biti stop,8 bit data
+}
+
+void USART_send(unsigned char data) //receptie 
+{
+  while( !( UCSR0A & (1<<UDRE0)) ) ;  //asteapta pentru eliberarea registrului UDR0 de la transmisia precedenta 
+  UDR0=data;
+}
+
+unsigned char USART_receive(void) //transmisie
+{
+  return UDR0;
+}
+
+void on_off_led11()
+{
+  litera_data=USART_receive();
+  
+  // aprindere/stingere led port B-pin 11
+  if(litera_data == 'A')
+  {
+    PORTB|=B00001000; //daca se trimite litera "A", se aprinde led
+  }
+  else if(litera_data == 'S')
+  {
+    PORTB&=~B00001000; //daca se trimite litera "S", se stinge led
+  } 
+}
+
+void temperatura()
+{
+  numar_CAN=read_adc(4); 
+  x=(numar_CAN*5000)/1023;
+  t=(x-500)/10;
+  
+    //aprind led port B pin 13 daca temp>35, altfel e stins, histerezis 0.5 
+  if(t>35.5)
+      PORTB|=B00100000;
+  if(t<=34.5)
+      PORTB&=~B00100000;
+  t=t*100;
+  temp=(int)(t);
+  
+  //convertsie din int in char cu ajutorul functiei itoa
+  itoa(temp/100, intreaga, 10); //pentru a converti partea intreaga a temperaturii
+  itoa(abs(temp%100), fractionara, 10); //pentru a converti partea fractionara a temperaturii
+  
+  //concatenare caracterele ce reprezinta temmperatura 
+  strcat(intreaga, ",");
+  strcat(intreaga, fractionara);
+  strcat(intreaga, "\n");
+  
+  //afisare temperatura pe curenta in serial monitor 
+  for(int i=0;i<strlen(intreaga);i++)
+  {
+    USART_send(intreaga[i]); //se trimite pe rand cate un caracter 
+  }
+}
